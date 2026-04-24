@@ -1,0 +1,648 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "QuBox BE",
+    "version": "1.0.0",
+    "description": "REST API for the live Q&A question pool platform. Participants join sessions, submit and upvote questions; moderators curate the pool. Real-time updates are delivered over WebSocket (see WebSocket Events section)."
+  },
+  "servers": [
+    {
+      "url": "http://localhost:3000",
+      "description": "Local development server"
+    }
+  ],
+  "tags": [
+    { "name": "Sessions", "description": "Session lifecycle management" },
+    { "name": "Questions", "description": "Question submission and retrieval" },
+    { "name": "Moderation", "description": "Moderator actions on questions" },
+    { "name": "Upvotes", "description": "Participant upvoting" }
+  ],
+  "paths": {
+    "/sessions": {
+      "post": {
+        "tags": ["Sessions"],
+        "summary": "Create a new session",
+        "description": "Creates a new Q&A session. The session starts in `created` status and must be explicitly started before it accepts questions.",
+        "operationId": "createSession",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/CreateSessionRequest" },
+              "example": {
+                "title": "AMA: Product Roadmap Q3",
+                "description": "Ask us anything about the upcoming roadmap.",
+                "anonymousAllowed": true,
+                "hostId": "host-uuid-001"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Session created successfully.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Session" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/sessions/{id}/start": {
+      "post": {
+        "tags": ["Sessions"],
+        "summary": "Start a session",
+        "description": "Transitions the session from `created` to `open`. Once open, participants can submit and upvote questions.",
+        "operationId": "startSession",
+        "parameters": [
+          { "$ref": "#/components/parameters/SessionId" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/HostActionRequest" },
+              "example": { "hostId": "host-uuid-001" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Session started. Status is now `open`.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Session" }
+              }
+            }
+          },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/TransitionError" }
+        }
+      }
+    },
+    "/sessions/{id}/end": {
+      "post": {
+        "tags": ["Sessions"],
+        "summary": "End a session",
+        "description": "Transitions the session from `open` to `closed`. No new questions or upvotes are accepted after this point. A `session_closed` WebSocket event is broadcast to all connected clients.",
+        "operationId": "endSession",
+        "parameters": [
+          { "$ref": "#/components/parameters/SessionId" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/HostActionRequest" },
+              "example": { "hostId": "host-uuid-001" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Session ended. Status is now `closed`.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Session" }
+              }
+            }
+          },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/TransitionError" }
+        }
+      }
+    },
+    "/sessions/{joinCode}": {
+      "get": {
+        "tags": ["Sessions"],
+        "summary": "Join a session by join code",
+        "description": "Looks up a session by its join code and returns the session details, a participant ID, and the current list of visible questions. If `anonymousAllowed` is true and no `participantId` is provided, a new anonymous UUID is assigned. Re-joining with the same join code returns the same participant ID.",
+        "operationId": "joinSession",
+        "parameters": [
+          { "$ref": "#/components/parameters/JoinCode" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successfully joined the session.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/JoinResult" }
+              }
+            }
+          },
+          "404": {
+            "description": "Invalid or expired join code.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" },
+                "example": { "error": "Session not found" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/sessions/{id}/questions": {
+      "post": {
+        "tags": ["Questions"],
+        "summary": "Submit a question",
+        "description": "Submits a new question to an open session. The question is assigned a UUID and timestamp, and its initial status is `pending`. Questions submitted to a closed session are rejected.",
+        "operationId": "submitQuestion",
+        "parameters": [
+          { "$ref": "#/components/parameters/SessionId" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/SubmitQuestionRequest" },
+              "example": {
+                "participantId": "anon-uuid-abc123",
+                "text": "What is the biggest challenge you faced this quarter?"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Question submitted. Status is `pending`.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Question" }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error — text is empty or exceeds 300 characters.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ValidationErrorResponse" },
+                "example": {
+                  "error": "Question text must be between 1 and 300 characters",
+                  "field": "text"
+                }
+              }
+            }
+          },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": {
+            "description": "Session is closed.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" },
+                "example": { "error": "Session is closed" }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": ["Questions"],
+        "summary": "Get visible questions for a session",
+        "description": "Returns all `approved` and `pinned` questions for the session, ordered by: pinned first, then approved sorted by upvote count descending, ties broken by submission timestamp ascending.",
+        "operationId": "getVisibleQuestions",
+        "parameters": [
+          { "$ref": "#/components/parameters/SessionId" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Ordered list of visible questions.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/Question" }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/questions/{id}/approve": {
+      "patch": {
+        "tags": ["Moderation"],
+        "summary": "Approve a question",
+        "description": "Transitions a `pending` question to `approved`. If the question is not in `pending` status, a 409 reconfirmation response is returned with the current status — the caller must re-send to confirm the action.",
+        "operationId": "approveQuestion",
+        "parameters": [
+          { "$ref": "#/components/parameters/QuestionId" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ModeratorActionRequest" },
+              "example": { "moderatorId": "mod-uuid-001" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Question approved. Status is now `approved`.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Question" }
+              }
+            }
+          },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/ReconfirmationRequired" }
+        }
+      }
+    },
+    "/questions/{id}/reject": {
+      "patch": {
+        "tags": ["Moderation"],
+        "summary": "Reject a question",
+        "description": "Transitions a `pending` question to `rejected`. If the question is not in `pending` status, a 409 reconfirmation response is returned with the current status.",
+        "operationId": "rejectQuestion",
+        "parameters": [
+          { "$ref": "#/components/parameters/QuestionId" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ModeratorActionRequest" },
+              "example": { "moderatorId": "mod-uuid-001" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Question rejected. Status is now `rejected`.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Question" }
+              }
+            }
+          },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/ReconfirmationRequired" }
+        }
+      }
+    },
+    "/questions/{id}/pin": {
+      "patch": {
+        "tags": ["Moderation"],
+        "summary": "Pin a question",
+        "description": "Transitions a question to `pinned` status regardless of its current status. Pinned questions appear at the top of the visible question list.",
+        "operationId": "pinQuestion",
+        "parameters": [
+          { "$ref": "#/components/parameters/QuestionId" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ModeratorActionRequest" },
+              "example": { "moderatorId": "mod-uuid-001" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Question pinned. Status is now `pinned`.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Question" }
+              }
+            }
+          },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/questions/{id}/answer": {
+      "patch": {
+        "tags": ["Moderation"],
+        "summary": "Mark a question as answered",
+        "description": "Transitions a question to `answered` status. Only allowed from `approved` or `pinned` status. Attempting from any other status returns a 409 transition error.",
+        "operationId": "markAnswered",
+        "parameters": [
+          { "$ref": "#/components/parameters/QuestionId" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ModeratorActionRequest" },
+              "example": { "moderatorId": "mod-uuid-001" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Question marked as answered. Status is now `answered`.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Question" }
+              }
+            }
+          },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/TransitionError" }
+        }
+      }
+    },
+    "/questions/{id}/upvote": {
+      "post": {
+        "tags": ["Upvotes"],
+        "summary": "Upvote a question",
+        "description": "Records an upvote from a participant on an eligible question. Each participant may upvote a given question at most once. Only `approved` and `pinned` questions in an open session are eligible.",
+        "operationId": "upvoteQuestion",
+        "parameters": [
+          { "$ref": "#/components/parameters/QuestionId" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/UpvoteRequest" },
+              "example": {
+                "participantId": "anon-uuid-abc123",
+                "sessionId": "session-uuid-001"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Upvote recorded.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Upvote" }
+              }
+            }
+          },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": {
+            "description": "Participant has already upvoted this question.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" },
+                "example": { "error": "Already upvoted" }
+              }
+            }
+          },
+          "422": {
+            "description": "Question is not eligible for upvoting (status is `pending`, `rejected`, or `answered`).",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" },
+                "example": { "error": "Question is not eligible for upvoting" }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "parameters": {
+      "SessionId": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "description": "Session UUID",
+        "schema": { "type": "string", "format": "uuid" }
+      },
+      "JoinCode": {
+        "name": "joinCode",
+        "in": "path",
+        "required": true,
+        "description": "Short alphanumeric join code assigned to the session on creation (e.g. `ABC123`)",
+        "schema": { "type": "string", "example": "ABC123" }
+      },
+      "QuestionId": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "description": "Question UUID",
+        "schema": { "type": "string", "format": "uuid" }
+      }
+    },
+    "schemas": {
+      "Session": {
+        "type": "object",
+        "required": ["id", "joinCode", "title", "hostId", "status", "anonymousAllowed", "createdAt"],
+        "properties": {
+          "id":               { "type": "string", "format": "uuid" },
+          "joinCode":         { "type": "string", "example": "ABC123", "description": "Short unique code participants use to join" },
+          "title":            { "type": "string", "example": "AMA: Product Roadmap Q3" },
+          "description":      { "type": "string", "nullable": true },
+          "hostId":           { "type": "string", "format": "uuid" },
+          "status":           { "type": "string", "enum": ["created", "open", "closed"] },
+          "anonymousAllowed": { "type": "boolean" },
+          "createdAt":        { "type": "string", "format": "date-time" },
+          "startedAt":        { "type": "string", "format": "date-time", "nullable": true },
+          "endedAt":          { "type": "string", "format": "date-time", "nullable": true }
+        }
+      },
+      "Question": {
+        "type": "object",
+        "required": ["id", "sessionId", "participantId", "text", "status", "upvoteCount", "submittedAt", "lastModifiedAt"],
+        "properties": {
+          "id":             { "type": "string", "format": "uuid" },
+          "sessionId":      { "type": "string", "format": "uuid" },
+          "participantId":  { "type": "string", "format": "uuid" },
+          "text":           { "type": "string", "minLength": 1, "maxLength": 300 },
+          "status":         { "type": "string", "enum": ["pending", "approved", "rejected", "answered", "pinned"] },
+          "upvoteCount":    { "type": "integer", "minimum": 0 },
+          "submittedAt":    { "type": "string", "format": "date-time" },
+          "lastModifiedAt": { "type": "string", "format": "date-time" },
+          "lastModifiedBy": { "type": "string", "format": "uuid", "nullable": true, "description": "Moderator ID of the last status change" }
+        }
+      },
+      "Upvote": {
+        "type": "object",
+        "required": ["questionId", "participantId", "sessionId", "createdAt"],
+        "properties": {
+          "questionId":    { "type": "string", "format": "uuid" },
+          "participantId": { "type": "string", "format": "uuid" },
+          "sessionId":     { "type": "string", "format": "uuid" },
+          "createdAt":     { "type": "string", "format": "date-time" }
+        }
+      },
+      "JoinResult": {
+        "type": "object",
+        "required": ["session", "participantId", "questions"],
+        "properties": {
+          "session":       { "$ref": "#/components/schemas/Session" },
+          "participantId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Existing participant ID (on re-join) or newly assigned anonymous UUID. Store this client-side for subsequent requests."
+          },
+          "questions": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/Question" },
+            "description": "Current visible questions (approved + pinned) in display order"
+          }
+        }
+      },
+      "CreateSessionRequest": {
+        "type": "object",
+        "required": ["title", "anonymousAllowed", "hostId"],
+        "properties": {
+          "title":            { "type": "string", "example": "AMA: Product Roadmap Q3" },
+          "description":      { "type": "string", "nullable": true },
+          "anonymousAllowed": { "type": "boolean", "default": true },
+          "hostId":           { "type": "string", "format": "uuid" }
+        }
+      },
+      "HostActionRequest": {
+        "type": "object",
+        "required": ["hostId"],
+        "properties": {
+          "hostId": { "type": "string", "format": "uuid" }
+        }
+      },
+      "SubmitQuestionRequest": {
+        "type": "object",
+        "required": ["participantId", "text"],
+        "properties": {
+          "participantId": { "type": "string", "format": "uuid", "description": "The participant ID returned from the join endpoint" },
+          "text":          { "type": "string", "minLength": 1, "maxLength": 300 }
+        }
+      },
+      "ModeratorActionRequest": {
+        "type": "object",
+        "required": ["moderatorId"],
+        "properties": {
+          "moderatorId": { "type": "string", "format": "uuid" }
+        }
+      },
+      "UpvoteRequest": {
+        "type": "object",
+        "required": ["participantId", "sessionId"],
+        "properties": {
+          "participantId": { "type": "string", "format": "uuid" },
+          "sessionId":     { "type": "string", "format": "uuid" }
+        }
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "required": ["error"],
+        "properties": {
+          "error": { "type": "string" }
+        }
+      },
+      "ValidationErrorResponse": {
+        "type": "object",
+        "required": ["error"],
+        "properties": {
+          "error": { "type": "string" },
+          "field": { "type": "string", "description": "The request field that failed validation", "example": "text" }
+        }
+      },
+      "ReconfirmationRequiredResponse": {
+        "type": "object",
+        "required": ["error", "currentStatus"],
+        "properties": {
+          "error":         { "type": "string", "example": "Question is not in pending status (current: approved)" },
+          "currentStatus": { "type": "string", "enum": ["pending", "approved", "rejected", "answered", "pinned"], "description": "The question's actual current status" }
+        }
+      }
+    },
+    "responses": {
+      "NotFound": {
+        "description": "Resource not found.",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/ErrorResponse" },
+            "example": { "error": "Not found" }
+          }
+        }
+      },
+      "TransitionError": {
+        "description": "Invalid state transition.",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/ErrorResponse" },
+            "example": { "error": "Cannot transition from current status" }
+          }
+        }
+      },
+      "ReconfirmationRequired": {
+        "description": "Question is not in `pending` status. The response includes the current status so the caller can decide whether to confirm the action.",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/ReconfirmationRequiredResponse" }
+          }
+        }
+      }
+    }
+  },
+  "x-websocket": {
+    "description": "Real-time events are delivered over WebSocket. Connect to the same host/port as the HTTP server. All events are JSON-encoded.",
+    "events": {
+      "question_approved": {
+        "description": "Broadcast to all session subscribers when a question is approved. Arrives within 2 seconds of the moderation action.",
+        "payload": {
+          "type": "object",
+          "properties": {
+            "type":     { "type": "string", "enum": ["question_approved"] },
+            "question": { "$ref": "#/components/schemas/Question" }
+          }
+        }
+      },
+      "question_pinned": {
+        "description": "Broadcast when a question is pinned.",
+        "payload": {
+          "type": "object",
+          "properties": {
+            "type":     { "type": "string", "enum": ["question_pinned"] },
+            "question": { "$ref": "#/components/schemas/Question" }
+          }
+        }
+      },
+      "question_answered": {
+        "description": "Broadcast when a question is marked answered.",
+        "payload": {
+          "type": "object",
+          "properties": {
+            "type":     { "type": "string", "enum": ["question_answered"] },
+            "question": { "$ref": "#/components/schemas/Question" }
+          }
+        }
+      },
+      "upvote_updated": {
+        "description": "Broadcast when an upvote is recorded. Contains the new total count.",
+        "payload": {
+          "type": "object",
+          "properties": {
+            "type":        { "type": "string", "enum": ["upvote_updated"] },
+            "questionId":  { "type": "string", "format": "uuid" },
+            "upvoteCount": { "type": "integer", "minimum": 0 }
+          }
+        }
+      },
+      "session_closed": {
+        "description": "Broadcast to all session subscribers when the host ends the session.",
+        "payload": {
+          "type": "object",
+          "properties": {
+            "type": { "type": "string", "enum": ["session_closed"] }
+          }
+        }
+      },
+      "session_state": {
+        "description": "Sent to a single client upon reconnection. Contains the full current list of visible questions in display order.",
+        "payload": {
+          "type": "object",
+          "properties": {
+            "type":      { "type": "string", "enum": ["session_state"] },
+            "questions": {
+              "type": "array",
+              "items": { "$ref": "#/components/schemas/Question" }
+            }
+          }
+        }
+      }
+    }
+  }
+}
