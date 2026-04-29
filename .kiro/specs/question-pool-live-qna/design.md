@@ -95,7 +95,8 @@ approveQuestion(questionId: string, moderatorId: string) → Question | StatusEr
 rejectQuestion(questionId: string, moderatorId: string) → Question | StatusError
 pinQuestion(questionId: string, moderatorId: string) → Question
 markAnswered(questionId: string, moderatorId: string) → Question
-getVisibleQuestions(sessionId: string) → Question[]   // ordered per Req 5
+getVisibleQuestions(sessionId: string) → Question[]   // ordered per Req 5, approved + pinned only (participant view)
+getAllQuestions(sessionId: string) → Question[]        // all statuses, ordered per Req 5 (host/moderator view)
 ```
 
 ### Upvote Manager
@@ -312,9 +313,9 @@ interface JoinResult {
 
 ### Property 10: Visible question filtering
 
-*For any* session containing questions in various statuses, the list of visible questions returned to any client (host, moderator, or participant) must contain only questions with status `approved` or `pinned`.
+*For any* session containing questions in various statuses, the list of visible questions returned to **participants** (`GET /sessions/{id}/questions`) must contain only questions with status `approved` or `pinned`. The full question list returned to **hosts and moderators** (`GET /sessions/{id}/questions/all`) must contain questions of all statuses.
 
-**Validates: Requirements 5.1, 5.4**
+**Validates: Requirements 5.1, 5.2, 5.5**
 
 ---
 

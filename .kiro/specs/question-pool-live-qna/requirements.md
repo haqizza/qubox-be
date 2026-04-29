@@ -84,11 +84,12 @@ A live Q&A question pool application that allows audience members to submit ques
 
 #### Acceptance Criteria
 
-1. THE Question_Pool SHALL display `approved` and `pinned` Questions to the Host and Moderator.
-2. THE Question_Pool SHALL order Questions by placing `pinned` Questions first, followed by `approved` Questions sorted by upvote count in descending order.
-3. WHEN two `approved` Questions have equal upvote counts, THE Question_Pool SHALL order them by submission timestamp in ascending order.
-4. THE Question_Pool SHALL display only `approved` and `pinned` Questions to Participants.
-5. WHEN a Question's Status or upvote count changes, THE Question_Pool SHALL update the displayed order within 2 seconds.
+1. THE Question_Pool SHALL display `approved` and `pinned` Questions to Participants.
+2. THE Question_Pool SHALL display all Questions (including `pending`, `rejected`, `approved`, `pinned`, and `answered`) to the Host and Moderator via a dedicated endpoint.
+3. THE Question_Pool SHALL order Questions by placing `pinned` Questions first, followed by `approved` Questions sorted by upvote count in descending order.
+4. WHEN two `approved` Questions have equal upvote counts, THE Question_Pool SHALL order them by submission timestamp in ascending order.
+5. THE Question_Pool SHALL display only `approved` and `pinned` Questions to Participants.
+6. WHEN a Question's Status or upvote count changes, THE Question_Pool SHALL update the displayed order within 2 seconds.
 
 ---
 

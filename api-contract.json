@@ -221,6 +221,30 @@
         }
       }
     },
+    "/sessions/{id}/questions/all": {
+      "get": {
+        "tags": ["Moderation"],
+        "summary": "Get all questions for a session (host/moderator view)",
+        "description": "Returns all questions for the session regardless of status — including `pending`, `rejected`, `approved`, `pinned`, and `answered`. Intended for the host or moderator to review and act on pending questions. Results are ordered the same way as the visible endpoint.",
+        "operationId": "getAllQuestions",
+        "parameters": [
+          { "$ref": "#/components/parameters/SessionId" }
+        ],
+        "responses": {
+          "200": {
+            "description": "All questions for the session in display order.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/Question" }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/questions/{id}/approve": {
       "patch": {
         "tags": ["Moderation"],

@@ -149,6 +149,13 @@ export class QuestionManager {
     );
     return orderQuestions(filtered);
   }
+
+  getAllQuestions(sessionId: string): Question[] {
+    const filtered = Array.from(this.questions.values()).filter(
+      (q) => q.sessionId === sessionId
+    );
+    return orderQuestions(filtered);
+  }
 }
 
 export const questionManager = new QuestionManager();

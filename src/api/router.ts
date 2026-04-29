@@ -81,8 +81,16 @@ router.post("/sessions/:id/questions", (req: Request, res: Response) => {
 });
 
 // GET /sessions/:id/questions
+// Public view — returns only approved/pinned questions
 router.get("/sessions/:id/questions", (req: Request, res: Response) => {
   const questions = questionManager.getVisibleQuestions(req.params.id);
+  res.status(200).json(questions);
+});
+
+// GET /sessions/:id/questions/all
+// Host/moderator view — returns all questions including pending and rejected
+router.get("/sessions/:id/questions/all", (req: Request, res: Response) => {
+  const questions = questionManager.getAllQuestions(req.params.id);
   res.status(200).json(questions);
 });
 
