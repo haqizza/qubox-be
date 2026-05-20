@@ -46,8 +46,11 @@ export interface ModerationEvent {
 export type SessionEvent =
   | { type: "question_approved"; question: Question }
   | { type: "question_pinned"; question: Question }
+  | { type: "question_unpinned"; question: Question }
   | { type: "question_answered"; question: Question }
+  | { type: "question_submitted"; question: Question }
   | { type: "upvote_updated"; questionId: string; upvoteCount: number }
+  | { type: "session_started"; session: Session }
   | { type: "session_closed" }
   | { type: "session_state"; questions: Question[] };
 

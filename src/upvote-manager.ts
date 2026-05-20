@@ -1,4 +1,3 @@
-import { v4 as uuidv4 } from "uuid";
 import {
   Upvote,
   Question,
@@ -8,41 +7,26 @@ import {
   DuplicateUpvoteError,
 } from "./types";
 import { RealTimeBroadcaster } from "./realtime-broadcaster";
+import db from "./db";
 
 export class UpvoteManager {
-  // Keyed by `${questionId}:${participantId}` for deduplication
-  private upvoteKeys: Set<string> = new Set();
-  // Keyed by questionId
-  private upvotes: Map<string, Upvote[]> = new Map();
   private broadcaster: RealTimeBroadcaster | null = null;
 
-  /**
-   * Inject a RealTimeBroadcaster so successful upvotes push `upvote_updated`
-   * events to connected clients. Optional to keep existing unit tests unchanged.
-   */
   setBroadcaster(broadcaster: RealTimeBroadcaster): void {
     this.broadcaster = broadcaster;
   }
 
   upvote(question: Question, participantId: string, session: Session): Upvote {
-    if (session.status !== "open") {
-      throw new SessionClosedError();
+    if (session.status !== "open") throw new SessionClosedError();
+
+    if (question.status === "pending" || question.status === "rejected" || question.status === "answered") {
+      throw new UpvoteEligibilityError(`Question is not eligible for upvoting (status: ${question.status})`);
     }
 
-    if (
-      question.status === "pending" ||
-      question.status === "rejected" ||
-      question.status === "answered"
-    ) {
-      throw new UpvoteEligibilityError(
-        `Question is not eligible for upvoting (status: ${question.status})`
-      );
-    }
-
-    const key = `${question.id}:${participantId}`;
-    if (this.upvoteKeys.has(key)) {
-      throw new DuplicateUpvoteError();
-    }
+    const existing = db.prepare(
+      "SELECT 1 FROM upvotes WHERE questionId = ? AND participantId = ?"
+    ).get(question.id, participantId);
+    if (existing) throw new DuplicateUpvoteError();
 
     const upvote: Upvote = {
       questionId: question.id,
@@ -51,25 +35,26 @@ export class UpvoteManager {
       createdAt: new Date(),
     };
 
-    this.upvoteKeys.add(key);
+    db.prepare(
+      "INSERT INTO upvotes (questionId, participantId, sessionId, createdAt) VALUES (?, ?, ?, ?)"
+    ).run(upvote.questionId, upvote.participantId, upvote.sessionId, upvote.createdAt.toISOString());
 
-    const existing = this.upvotes.get(question.id) ?? [];
-    existing.push(upvote);
-    this.upvotes.set(question.id, existing);
-
-    question.upvoteCount += 1;
+    // Increment upvote count atomically in DB and return new count
+    db.prepare("UPDATE questions SET upvoteCount = upvoteCount + 1 WHERE id = ?").run(question.id);
+    const row = db.prepare("SELECT upvoteCount FROM questions WHERE id = ?").get(question.id) as { upvoteCount: number };
 
     this.broadcaster?.broadcast(session.id, {
       type: "upvote_updated",
       questionId: question.id,
-      upvoteCount: question.upvoteCount,
+      upvoteCount: row.upvoteCount,
     });
 
     return upvote;
   }
 
   getUpvoteCount(questionId: string): number {
-    return this.upvotes.get(questionId)?.length ?? 0;
+    const row = db.prepare("SELECT upvoteCount FROM questions WHERE id = ?").get(questionId) as { upvoteCount: number } | undefined;
+    return row?.upvoteCount ?? 0;
   }
 }
 

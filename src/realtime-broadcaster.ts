@@ -57,6 +57,7 @@ export class RealTimeBroadcaster {
     if (!room || room.size === 0) return;
 
     const payload = JSON.stringify(event);
+    console.log(`[${new Date().toISOString()}] WS  BROADCAST sessionId=${sessionId} type=${event.type} recipients=${room.size}`);
 
     for (const [connectionId, ws] of room.entries()) {
       this.sendWithRetry(connectionId, ws, payload);

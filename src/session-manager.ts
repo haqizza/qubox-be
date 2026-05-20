@@ -1,6 +1,7 @@
 import { v4 as uuidv4 } from "uuid";
 import { Session, NotFoundError, TransitionError } from "./types";
 import { RealTimeBroadcaster } from "./realtime-broadcaster";
+import db from "./db";
 
 const JOIN_CODE_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 const JOIN_CODE_LENGTH = 6;
@@ -13,15 +14,24 @@ function generateJoinCode(): string {
   return code;
 }
 
+function rowToSession(row: Record<string, unknown>): Session {
+  return {
+    id: row.id as string,
+    joinCode: row.joinCode as string,
+    title: row.title as string,
+    description: (row.description as string) ?? undefined,
+    hostId: row.hostId as string,
+    status: row.status as Session["status"],
+    anonymousAllowed: Boolean(row.anonymousAllowed),
+    createdAt: new Date(row.createdAt as string),
+    startedAt: row.startedAt ? new Date(row.startedAt as string) : undefined,
+    endedAt: row.endedAt ? new Date(row.endedAt as string) : undefined,
+  };
+}
+
 export class SessionManager {
-  private sessions: Map<string, Session> = new Map(); // keyed by sessionId
-  private joinCodeIndex: Map<string, string> = new Map(); // joinCode → sessionId
   private broadcaster: RealTimeBroadcaster | null = null;
 
-  /**
-   * Inject a RealTimeBroadcaster so `session_closed` is pushed when a host
-   * ends a session. Optional to keep existing unit tests unchanged.
-   */
   setBroadcaster(broadcaster: RealTimeBroadcaster): void {
     this.broadcaster = broadcaster;
   }
@@ -35,7 +45,7 @@ export class SessionManager {
     let joinCode: string;
     do {
       joinCode = generateJoinCode();
-    } while (this.joinCodeIndex.has(joinCode));
+    } while (db.prepare("SELECT 1 FROM sessions WHERE joinCode = ?").get(joinCode));
 
     const session: Session = {
       id: uuidv4(),
@@ -48,71 +58,77 @@ export class SessionManager {
       createdAt: new Date(),
     };
 
-    this.sessions.set(session.id, session);
-    this.joinCodeIndex.set(joinCode, session.id);
+    db.prepare(`
+      INSERT INTO sessions (id, joinCode, title, description, hostId, status, anonymousAllowed, createdAt)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      session.id,
+      session.joinCode,
+      session.title,
+      session.description ?? null,
+      session.hostId,
+      session.status,
+      session.anonymousAllowed ? 1 : 0,
+      session.createdAt.toISOString()
+    );
 
     return session;
   }
 
   startSession(sessionId: string, hostId: string): Session {
-    const session = this.sessions.get(sessionId);
-    if (!session) {
-      throw new NotFoundError(`Session not found: ${sessionId}`);
-    }
+    const row = db.prepare("SELECT * FROM sessions WHERE id = ?").get(sessionId) as Record<string, unknown> | undefined;
+    if (!row) throw new NotFoundError(`Session not found: ${sessionId}`);
+
+    const session = rowToSession(row);
     if (session.status !== "created") {
-      throw new TransitionError(
-        `Cannot start session in status '${session.status}'. Expected 'created'.`
-      );
+      throw new TransitionError(`Cannot start session in status '${session.status}'. Expected 'created'.`);
     }
 
-    const updated: Session = {
-      ...session,
-      status: "open",
-      startedAt: new Date(),
-    };
-    this.sessions.set(sessionId, updated);
+    const startedAt = new Date();
+    db.prepare("UPDATE sessions SET status = 'open', startedAt = ? WHERE id = ?")
+      .run(startedAt.toISOString(), sessionId);
+
+    const updated: Session = { ...session, status: "open", startedAt };
+    this.broadcaster?.broadcast(sessionId, { type: "session_started", session: updated });
     return updated;
   }
 
   endSession(sessionId: string, hostId: string): Session {
-    const session = this.sessions.get(sessionId);
-    if (!session) {
-      throw new NotFoundError(`Session not found: ${sessionId}`);
-    }
+    const row = db.prepare("SELECT * FROM sessions WHERE id = ?").get(sessionId) as Record<string, unknown> | undefined;
+    if (!row) throw new NotFoundError(`Session not found: ${sessionId}`);
+
+    const session = rowToSession(row);
     if (session.status !== "open") {
-      throw new TransitionError(
-        `Cannot end session in status '${session.status}'. Expected 'open'.`
-      );
+      throw new TransitionError(`Cannot end session in status '${session.status}'. Expected 'open'.`);
     }
 
-    const updated: Session = {
-      ...session,
-      status: "closed",
-      endedAt: new Date(),
-    };
-    this.sessions.set(sessionId, updated);
+    const endedAt = new Date();
+    db.prepare("UPDATE sessions SET status = 'closed', endedAt = ? WHERE id = ?")
+      .run(endedAt.toISOString(), sessionId);
+
+    const updated: Session = { ...session, status: "closed", endedAt };
     this.broadcaster?.broadcast(sessionId, { type: "session_closed" });
     return updated;
   }
 
   getSessionById(sessionId: string): Session {
-    const session = this.sessions.get(sessionId);
-    if (!session) {
-      throw new NotFoundError(`Session not found: ${sessionId}`);
-    }
-    return session;
+    const row = db.prepare("SELECT * FROM sessions WHERE id = ?").get(sessionId) as Record<string, unknown> | undefined;
+    if (!row) throw new NotFoundError(`Session not found: ${sessionId}`);
+    return rowToSession(row);
   }
 
   getSession(joinCode: string): Session {
-    const sessionId = this.joinCodeIndex.get(joinCode);
-    if (!sessionId) {
-      throw new NotFoundError(`Session not found for join code: ${joinCode}`);
-    }
-    const session = this.sessions.get(sessionId);
-    if (!session) {
-      throw new NotFoundError(`Session not found for join code: ${joinCode}`);
-    }
-    return session;
+    const row = db.prepare("SELECT * FROM sessions WHERE joinCode = ?").get(joinCode) as Record<string, unknown> | undefined;
+    if (!row) throw new NotFoundError(`Session not found for join code: ${joinCode}`);
+    return rowToSession(row);
+  }
+
+  resolveSession(joinCodeOrId: string): Session {
+    // Try join code first, then session ID
+    const row = db.prepare("SELECT * FROM sessions WHERE joinCode = ? OR id = ? LIMIT 1")
+      .get(joinCodeOrId, joinCodeOrId) as Record<string, unknown> | undefined;
+    if (!row) throw new NotFoundError(`Session not found: ${joinCodeOrId}`);
+    return rowToSession(row);
   }
 }
 

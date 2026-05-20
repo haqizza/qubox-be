@@ -83,15 +83,28 @@ router.post("/sessions/:id/questions", (req: Request, res: Response) => {
 // GET /sessions/:id/questions
 // Public view — returns only approved/pinned questions
 router.get("/sessions/:id/questions", (req: Request, res: Response) => {
-  const questions = questionManager.getVisibleQuestions(req.params.id);
-  res.status(200).json(questions);
+  try {
+    const session = sessionManager.resolveSession(req.params.id);
+    const questions = questionManager.getVisibleQuestions(session.id);
+    res.status(200).json(questions);
+  } catch (err) {
+    if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
+    throw err;
+  }
 });
 
 // GET /sessions/:id/questions/all
 // Host/moderator view — returns all questions including pending and rejected
 router.get("/sessions/:id/questions/all", (req: Request, res: Response) => {
-  const questions = questionManager.getAllQuestions(req.params.id);
-  res.status(200).json(questions);
+  try {
+    const session = sessionManager.resolveSession(req.params.id);
+    const questions = questionManager.getAllQuestions(session.id);
+    res.setHeader("Cache-Control", "no-store");
+    res.status(200).json(questions);
+  } catch (err) {
+    if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
+    throw err;
+  }
 });
 
 // PATCH /questions/:id/approve
@@ -127,6 +140,19 @@ router.patch("/questions/:id/pin", (req: Request, res: Response) => {
     const question = questionManager.pinQuestion(req.params.id, moderatorId);
     res.status(200).json(question);
   } catch (err) {
+    if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
+    throw err;
+  }
+});
+
+// PATCH /questions/:id/unpin
+router.patch("/questions/:id/unpin", (req: Request, res: Response) => {
+  const { moderatorId } = req.body;
+  try {
+    const question = questionManager.unpinQuestion(req.params.id, moderatorId);
+    res.status(200).json(question);
+  } catch (err) {
+    if (err instanceof TransitionError) return res.status(409).json({ error: err.message });
     if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
     throw err;
   }

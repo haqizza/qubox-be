@@ -340,6 +340,38 @@
         }
       }
     },
+    "/questions/{id}/unpin": {
+      "patch": {
+        "tags": ["Moderation"],
+        "summary": "Unpin a question",
+        "description": "Transitions a `pinned` question back to `approved`. The question remains visible but loses its pinned priority in the ordering. Returns 409 if the question is not currently `pinned`.",
+        "operationId": "unpinQuestion",
+        "parameters": [
+          { "$ref": "#/components/parameters/QuestionId" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ModeratorActionRequest" },
+              "example": { "moderatorId": "mod-uuid-001" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Question unpinned. Status is now `approved`.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Question" }
+              }
+            }
+          },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/TransitionError" }
+        }
+      }
+    },
     "/questions/{id}/answer": {
       "patch": {
         "tags": ["Moderation"],
@@ -602,8 +634,48 @@
     }
   },
   "x-websocket": {
-    "description": "Real-time events are delivered over WebSocket. Connect to the same host/port as the HTTP server. All events are JSON-encoded.",
+    "description": "Real-time events are delivered over WebSocket. Connect to the same host/port as the HTTP server. All messages are JSON-encoded.\n\nProtocol:\n1. Client connects and sends either a `join` message or a `request_session_state` message (with `joinCode`) to subscribe to a session room.\n2. Server responds with `session_state` (current visible questions) and, if the session is already `open` or `closed`, immediately follows with a catch-up `session_started` or `session_closed` event.\n3. Subsequent state changes are pushed automatically via broadcast events.\n4. On disconnect the connection is removed from the session room.",
+    "clientMessages": {
+      "join": {
+        "description": "Subscribe this connection to a session room. Must be sent before any other message (except `request_session_state` which can also perform the initial join). The server responds with a `session_state` event followed by a catch-up `session_started` or `session_closed` event if the session is already past `created` status.",
+        "payload": {
+          "type": "object",
+          "required": ["type", "joinCode"],
+          "properties": {
+            "type":          { "type": "string", "enum": ["join"] },
+            "joinCode":      { "type": "string", "example": "ABC123", "description": "The session join code or session UUID" },
+            "participantId": { "type": "string", "format": "uuid", "description": "Optional. Provide to re-join as an existing participant." }
+          }
+        },
+        "example": { "type": "join", "joinCode": "ABC123" }
+      },
+      "request_session_state": {
+        "description": "Request the current visible questions for the session. Can be sent at any time after joining. If sent before joining, `joinCode` is required — the server will subscribe the connection to the session room first, then respond with `session_state` (and a catch-up status event if needed). If already joined, `joinCode` is ignored.",
+        "payload": {
+          "type": "object",
+          "required": ["type"],
+          "properties": {
+            "type":     { "type": "string", "enum": ["request_session_state"] },
+            "joinCode": { "type": "string", "example": "ABC123", "description": "Required only when the connection has not yet joined a session." }
+          }
+        },
+        "examples": {
+          "beforeJoin":  { "type": "request_session_state", "joinCode": "ABC123" },
+          "afterJoin":   { "type": "request_session_state" }
+        }
+      }
+    },
     "events": {
+      "question_submitted": {
+        "description": "Broadcast to all session subscribers when a participant submits a new question. The question arrives in `pending` status. Hosts and moderators should use this to show the question in their moderation queue without polling.",
+        "payload": {
+          "type": "object",
+          "properties": {
+            "type":     { "type": "string", "enum": ["question_submitted"] },
+            "question": { "$ref": "#/components/schemas/Question" }
+          }
+        }
+      },
       "question_approved": {
         "description": "Broadcast to all session subscribers when a question is approved. Arrives within 2 seconds of the moderation action.",
         "payload": {
@@ -620,6 +692,16 @@
           "type": "object",
           "properties": {
             "type":     { "type": "string", "enum": ["question_pinned"] },
+            "question": { "$ref": "#/components/schemas/Question" }
+          }
+        }
+      },
+      "question_unpinned": {
+        "description": "Broadcast when a pinned question is unpinned. The question reverts to `approved` status and moves out of the pinned position in the ordering.",
+        "payload": {
+          "type": "object",
+          "properties": {
+            "type":     { "type": "string", "enum": ["question_unpinned"] },
             "question": { "$ref": "#/components/schemas/Question" }
           }
         }
@@ -645,8 +727,18 @@
           }
         }
       },
+      "session_started": {
+        "description": "Sent when the session transitions to `open`. Delivered in two cases: (1) broadcast to all already-subscribed connections when the host calls the start endpoint; (2) sent directly to a connecting client as a catch-up event if the session is already `open` at the time of joining. Clients should use this event to transition their UI to the active Q&A view.",
+        "payload": {
+          "type": "object",
+          "properties": {
+            "type":    { "type": "string", "enum": ["session_started"] },
+            "session": { "$ref": "#/components/schemas/Session" }
+          }
+        }
+      },
       "session_closed": {
-        "description": "Broadcast to all session subscribers when the host ends the session.",
+        "description": "Sent when the session transitions to `closed`. Delivered in two cases: (1) broadcast to all already-subscribed connections when the host calls the end endpoint; (2) sent directly to a connecting client as a catch-up event if the session is already `closed` at the time of joining.",
         "payload": {
           "type": "object",
           "properties": {
@@ -655,7 +747,7 @@
         }
       },
       "session_state": {
-        "description": "Sent to a single client upon reconnection. Contains the full current list of visible questions in display order.",
+        "description": "Sent to a single client immediately after joining (via `join` or `request_session_state`) and on demand when the client sends `request_session_state`. Contains the full current list of visible questions in display order.",
         "payload": {
           "type": "object",
           "properties": {
@@ -664,6 +756,16 @@
               "type": "array",
               "items": { "$ref": "#/components/schemas/Question" }
             }
+          }
+        }
+      },
+      "error": {
+        "description": "Sent to a single client when a client message cannot be processed. The connection remains open.",
+        "payload": {
+          "type": "object",
+          "properties": {
+            "type":    { "type": "string", "enum": ["error"] },
+            "message": { "type": "string", "example": "joinCode required" }
           }
         }
       }

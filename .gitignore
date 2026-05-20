@@ -24,3 +24,8 @@ Thumbs.db
 
 # Test coverage
 coverage/
+
+# SQLite database
+data.db
+data.db-shm
+data.db-wal
